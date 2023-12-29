@@ -1,0 +1,28 @@
+*
+{
+  margin: 10px;
+  padding: 10px;
+  border: none;
+}
+
+QTextEdit
+{
+  margin-top: 0;
+  font-family: monospace;
+}
+
+QPushButton
+{
+  color: white;
+  background: #bababa;
+}
+
+QPushButton#runbutton:enabled
+{
+  background: #00b894;
+}
+
+QPushButton#terminatebutton:enabled
+{
+  background: #d63031;
+}

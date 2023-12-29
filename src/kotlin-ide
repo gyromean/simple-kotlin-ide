@@ -1,0 +1,171 @@
+#!/usr/bin/env python
+from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QLabel, QPushButton, QTextBrowser
+from PyQt6.QtGui import QPalette, QColor, QTextCursor, QCursor
+from PyQt6.QtCore import QProcess, QIODeviceBase, Qt
+import sys, re
+
+class HTMLUtils:
+  @staticmethod
+  def patch(data):
+    if data.endswith('\n'):
+      data = data[:-1] + '<br>' # Changes last '\n' to '<br>', otherwise it isn't displayed correctly
+    data = f'<div style="white-space: pre">' + data + '</div>' # Fixes whitespace issues with HTML
+    return data
+
+  @staticmethod
+  def color(data, color):
+    return f'<div style="color: {color}">{data}</div>'
+
+
+class ScriptBox(QTextEdit):
+  def __init__(self):
+    super().__init__()
+    self.setPlaceholderText('Insert script')
+
+  def highlight_at(self, row, col):
+    cursor = self.textCursor()
+    position = self.coords_to_offset(row, col)
+    if position == -1:
+      return
+    cursor.setPosition(position)
+    cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor)
+    self.setTextCursor(cursor)
+    pass
+
+  def coords_to_offset(self, row, col):
+    if row < 1 or col < 1:
+      return -1
+    if row == 1:
+      return col - 1
+    data = self.toPlainText()
+    offset = 0
+    while row > 1:
+      offset = data.find('\n', offset + 1)
+      if offset == -1: # Requested row doesn't exist
+        return -1
+      row -= 1
+    ret = offset + col
+    if ret + 1 > len(data):
+      return -1
+    return ret
+
+
+class OutputBox(QTextBrowser):
+  def __init__(self):
+    super().__init__()
+    self.setOpenLinks(False)
+
+  def append_html(self, data, color=None):
+    self.moveCursor(QTextCursor.MoveOperation.End)
+    data_with_links = HTMLUtils.patch(data)
+    if color:
+      data_with_links = HTMLUtils.color(data_with_links, color)
+    self.insertHtml(data_with_links)
+    self.moveCursor(QTextCursor.MoveOperation.End)
+
+
+class MainWindow(QMainWindow):
+  def __init__(self):
+    super(MainWindow, self).__init__()
+
+    with open('src/style.qss') as f:
+      self.setStyleSheet(f.read())
+
+    self.process = QProcess()
+    self.process.setProgram("/usr/bin/env")
+    self.process.setArguments(['kotlinc', '-script', '/tmp/foo.kts'])
+    self.process.readyReadStandardOutput.connect(self.process_stdout)
+    self.process.readyReadStandardError.connect(self.process_stderr)
+    self.process.finished.connect(self.process_finished)
+    self.process.started.connect(self.process_started)
+
+    self.setWindowTitle('Kotlin IDE')
+
+    layout1 = QHBoxLayout()
+    layout2 = QVBoxLayout()
+    layout3 = QVBoxLayout()
+    layout4 = QHBoxLayout()
+
+    self.editor = ScriptBox()
+
+    self.output = OutputBox()
+    self.output.anchorClicked.connect(self.link_click)
+
+    self.run_button = QPushButton('Run')
+    self.run_button.clicked.connect(self.exec_run)
+    self.run_button.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+    self.run_button.setObjectName("runbutton")
+
+    self.terminate_button = QPushButton('Terminate')
+    self.terminate_button.clicked.connect(self.exec_terminate)
+    self.terminate_button.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+    self.terminate_button.setObjectName("terminatebutton")
+    self.terminate_button.setEnabled(False)
+
+    self.exit_status_label = QLabel('Exit code: -')
+
+    layout1.addLayout(layout2)
+    layout1.addLayout(layout3)
+
+    layout2.addWidget(QLabel('Script editor:'))
+    layout2.addWidget(self.editor)
+
+    layout3.addLayout(layout4)
+    layout3.addWidget(QLabel('Script output:'))
+    layout3.addWidget(self.output)
+
+    layout4.addWidget(self.run_button)
+    layout4.addWidget(self.terminate_button)
+    layout4.addWidget(self.exit_status_label)
+
+    widget = QWidget()
+    widget.setLayout(layout1)
+    self.setCentralWidget(widget)
+
+  def exec_run(self):
+    self.clean_output()
+    with open('/tmp/foo.kts', 'w') as f:
+      f.write(self.editor.toPlainText())
+    self.process.start(QIODeviceBase.OpenModeFlag.Unbuffered | QIODeviceBase.OpenModeFlag.ReadWrite)
+
+  def exec_terminate(self):
+    self.process.terminate()
+
+  def clean_output(self):
+    self.output.setPlainText('')
+
+  def link_click(self, link):
+    row, col = map(int, link.toString().split('-'))
+    self.editor.highlight_at(row, col)
+
+  def process_started(self):
+    self.exit_status_label.setText(f'Exit code: -')
+    self.run_button.setText('Running...')
+    self.run_button.setEnabled(False)
+    self.terminate_button.setEnabled(True)
+
+  def process_finished(self, exit_code):
+    self.run_button.setText('Run')
+    self.run_button.setEnabled(True)
+    self.terminate_button.setEnabled(False)
+    self.exit_status_label.setText(f'Exit code: {exit_code}')
+
+  def process_stdout(self):
+    data = self.process.readAllStandardOutput().data().decode()
+    self.output.append_html(data)
+
+  def process_stderr(self):
+    data = self.process.readAllStandardError().data().decode()
+    data_with_links = re.sub(r'foo.kts:(\d+):(\d+)', r'<a href="\1-\2">foo.kts:\1:\2</a>', data) # Make error messages clickable
+    self.output.append_html(data_with_links, 'red')
+
+def main():
+  app = QApplication(sys.argv)
+
+  window = MainWindow()
+  window.show()
+
+  app.exec()
+
+if __name__ == '__main__':
+  main()
